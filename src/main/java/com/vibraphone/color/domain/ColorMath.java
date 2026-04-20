@@ -61,6 +61,24 @@ public final class ColorMath {
         );
     }
 
+    public static Rgb saturate(Rgb color, double amount) {
+        double average = (color.red() + color.green() + color.blue()) / 3.0;
+        double factor = 1 + Math.max(0, amount);
+
+        return new Rgb(
+                clampChannel((int) Math.round(average + ((color.red() - average) * factor))),
+                clampChannel((int) Math.round(average + ((color.green() - average) * factor))),
+                clampChannel((int) Math.round(average + ((color.blue() - average) * factor)))
+        );
+    }
+
+    public static double distance(Rgb left, Rgb right) {
+        int deltaRed = left.red() - right.red();
+        int deltaGreen = left.green() - right.green();
+        int deltaBlue = left.blue() - right.blue();
+        return Math.sqrt((deltaRed * deltaRed) + (deltaGreen * deltaGreen) + (deltaBlue * deltaBlue));
+    }
+
     public static Rgb accentForCell(double xRatio, double yRatio) {
         int red = clampChannel((int) Math.round(92 + (110 * (1 - yRatio))));
         int green = clampChannel((int) Math.round(38 + (160 * xRatio)));

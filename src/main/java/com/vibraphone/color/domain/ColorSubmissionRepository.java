@@ -11,6 +11,8 @@ public interface ColorSubmissionRepository extends JpaRepository<ColorSubmission
 
     List<ColorSubmission> findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(Instant since);
 
+    List<ColorSubmission> findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(Instant since, Pageable pageable);
+
     List<ColorSubmission> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     @Query("select count(distinct submission.deviceId) from ColorSubmission submission where submission.createdAt >= :since")

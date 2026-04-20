@@ -33,25 +33,45 @@ class ColorServiceTest {
     }
 
     @Test
-    void collageUsesRecentColorsAndCreatesExpectedGridSize() {
-        Instant recent = Instant.parse("2026-04-17T11:30:00Z");
+    void recentSubmissionsRespectSinceOverride() {
+        Instant sessionStart = Instant.parse("2026-04-17T11:50:00Z");
         List<ColorSubmission> submissions = List.of(
-                new ColorSubmission("#EE7755", "device-a", 0.1, 0.4, recent),
-                new ColorSubmission("#BB5588", "device-b", 0.7, 0.5, recent.minusSeconds(300)),
-                new ColorSubmission("#5577AA", "device-c", 0.3, 0.9, recent.minusSeconds(600))
+                new ColorSubmission("#EE7755", "device-a", 0.1, 0.4, sessionStart)
         );
 
-        when(repository.findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(any(Instant.class))).thenReturn(submissions);
-        when(repository.countDistinctDeviceIdSince(any(Instant.class))).thenReturn(3L);
+        when(repository.findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(eq(sessionStart), any()))
+                .thenReturn(submissions);
 
-        CollageResponse collage = service.generateCollage(2, 2, 24);
+        List<ColorSubmissionResponse> recent = service.getRecentSubmissions(8, sessionStart);
+
+        assertThat(recent).hasSize(1);
+        assertThat(recent.get(0).hexColor()).isEqualTo("#EE7755");
+    }
+
+    @Test
+    void collageUsesSessionWindowAndCreatesVariedGrid() {
+        Instant recent = Instant.parse("2026-04-17T11:30:00Z");
+        Instant sessionStart = Instant.parse("2026-04-17T11:00:00Z");
+        List<ColorSubmission> submissions = List.of(
+                new ColorSubmission("#EE7755", "device-a", 0.08, 0.12, recent),
+                new ColorSubmission("#2D9CDB", "device-b", 0.88, 0.18, recent.minusSeconds(300)),
+                new ColorSubmission("#7B61FF", "device-c", 0.22, 0.86, recent.minusSeconds(600)),
+                new ColorSubmission("#F2C94C", "device-d", 0.82, 0.8, recent.minusSeconds(900))
+        );
+
+        when(repository.findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(eq(sessionStart))).thenReturn(submissions);
+        when(repository.countDistinctDeviceIdSince(eq(sessionStart))).thenReturn(4L);
+
+        CollageResponse collage = service.generateCollage(2, 2, 24, sessionStart);
 
         assertThat(collage.width()).isEqualTo(2);
         assertThat(collage.height()).isEqualTo(2);
-        assertThat(collage.totalSubmissions()).isEqualTo(3);
-        assertThat(collage.activeContributors()).isEqualTo(3);
+        assertThat(collage.totalSubmissions()).isEqualTo(4);
+        assertThat(collage.activeContributors()).isEqualTo(4);
         assertThat(collage.cells()).hasSize(4);
-        assertThat(collage.cells().get(0).hexColor()).startsWith("#");
+        assertThat(collage.cells()).extracting(cell -> cell.hexColor()).doesNotHaveDuplicates();
+        assertThat(collage.cells()).allSatisfy(cell -> assertThat(cell.hexColor()).startsWith("#"));
+        assertThat(collage.cells()).anySatisfy(cell -> assertThat(cell.sampleCount()).isGreaterThan(0));
         assertThat(collage.dominantColors()).isNotEmpty();
     }
 }

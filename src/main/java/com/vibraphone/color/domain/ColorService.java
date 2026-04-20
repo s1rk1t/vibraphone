@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ColorService {
 
+    private static final double MAX_COLOR_DISTANCE = 441.6729559300637;
+
     private final ColorSubmissionRepository repository;
     private final Clock clock;
 
@@ -41,56 +43,54 @@ public class ColorService {
     }
 
     @Transactional(readOnly = true)
-    public List<ColorSubmissionResponse> getRecentSubmissions(int limit) {
-        return repository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit))
-                .stream()
+    public List<ColorSubmissionResponse> getRecentSubmissions(int limit, Instant sinceOverride) {
+        List<ColorSubmission> submissions = sinceOverride == null
+                ? repository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit))
+                : repository.findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(sinceOverride, PageRequest.of(0, limit));
+
+        return submissions.stream()
                 .map(ColorSubmissionResponse::from)
                 .toList();
     }
 
     @Transactional(readOnly = true)
-    public CollageResponse generateCollage(int width, int height, int hours) {
+    public CollageResponse generateCollage(int width, int height, int hours, Instant sinceOverride) {
         Instant now = Instant.now(clock);
-        Instant since = now.minus(Duration.ofHours(hours));
+        Instant since = resolveSince(Duration.ofHours(hours), sinceOverride, now);
         List<ColorSubmission> submissions = repository.findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(since);
         int totalCells = width * height;
-        List<List<ColorSubmission>> buckets = new ArrayList<>(totalCells);
+        ColorMath.Rgb globalAverage = buildGlobalAverage(submissions);
+        List<CellBlend> cellBlends = new ArrayList<>(totalCells);
 
         for (int index = 0; index < totalCells; index++) {
-            buckets.add(new ArrayList<>());
+            int row = index / width;
+            int column = index % width;
+            double xRatio = width == 1 ? 0.5 : (double) column / (width - 1);
+            double yRatio = height == 1 ? 0.5 : (double) row / (height - 1);
+            cellBlends.add(buildCellBlend(submissions, globalAverage, xRatio, yRatio, now));
         }
 
-        for (int index = 0; index < submissions.size(); index++) {
-            int bucketIndex = Math.min(totalCells - 1, (int) ((long) index * totalCells / Math.max(1, submissions.size())));
-            buckets.get(bucketIndex).add(submissions.get(index));
-        }
-
-        ColorMath.Rgb globalAverage = buildGlobalAverage(submissions);
-        int maxBucketSize = buckets.stream().mapToInt(List::size).max().orElse(1);
+        double maxInfluence = Math.max(1.0, cellBlends.stream()
+                .mapToDouble(CellBlend::influenceWeight)
+                .max()
+                .orElse(0));
         List<CollageCellResponse> cells = new ArrayList<>(totalCells);
 
         for (int index = 0; index < totalCells; index++) {
             int row = index / width;
             int column = index % width;
-            double xRatio = width == 1 ? 0 : (double) column / (width - 1);
-            double yRatio = height == 1 ? 0 : (double) row / (height - 1);
-            List<ColorSubmission> bucket = buckets.get(index);
-
-            ColorMath.Rgb cellColor = bucket.isEmpty()
-                    ? ColorMath.blend(globalAverage, ColorMath.accentForCell(xRatio, yRatio), 0.22)
-                    : buildBucketAverage(bucket, now);
-
-            double density = bucket.isEmpty()
-                    ? 0.18
-                    : Math.min(1.0, 0.35 + ((double) bucket.size() / maxBucketSize) * 0.65);
+            CellBlend cellBlend = cellBlends.get(index);
+            double density = cellBlend.sampleCount() == 0
+                    ? 0.16
+                    : Math.min(1.0, 0.28 + ((cellBlend.influenceWeight() / maxInfluence) * 0.72));
 
             cells.add(new CollageCellResponse(
                     index,
                     row,
                     column,
-                    ColorMath.toHex(cellColor),
+                    ColorMath.toHex(cellBlend.color()),
                     density,
-                    bucket.size()
+                    cellBlend.sampleCount()
             ));
         }
 
@@ -117,25 +117,57 @@ public class ColorService {
         return ColorMath.average(colors);
     }
 
-    private ColorMath.Rgb buildBucketAverage(List<ColorSubmission> bucket, Instant now) {
-        List<ColorMath.WeightedColor> weightedColors = new ArrayList<>(bucket.size());
+    private CellBlend buildCellBlend(
+            List<ColorSubmission> submissions,
+            ColorMath.Rgb globalAverage,
+            double xRatio,
+            double yRatio,
+            Instant now
+    ) {
+        List<ColorMath.WeightedColor> weightedColors = new ArrayList<>(submissions.size() + 1);
+        double influenceWeight = 0;
+        int contributingSamples = 0;
 
-        for (ColorSubmission submission : bucket) {
+        for (ColorSubmission submission : submissions) {
             double ageHours = Math.max(0, Duration.between(submission.getCreatedAt(), now).toMinutes() / 60.0);
-            double freshness = 1.0 / (1.0 + ageHours);
-            double paletteBias = 0.8 + (submission.getX() * 0.3) + ((1 - submission.getY()) * 0.2);
-            weightedColors.add(new ColorMath.WeightedColor(
-                    ColorMath.fromHex(submission.getHexColor()),
-                    freshness * paletteBias
-            ));
+            double freshness = 1.0 / (1.0 + (ageHours * 0.7));
+            double dx = xRatio - submission.getX();
+            double dy = yRatio - submission.getY();
+            double distance = Math.sqrt((dx * dx) + (dy * dy));
+            double proximity = Math.max(0, 1.15 - (distance * 1.7));
+
+            if (proximity <= 0) {
+                continue;
+            }
+
+            double paletteBias = 0.96 + (submission.getX() * 0.18) + ((1 - submission.getY()) * 0.14);
+            double weight = freshness * Math.pow(proximity, 2.2) * paletteBias;
+            weightedColors.add(new ColorMath.WeightedColor(ColorMath.fromHex(submission.getHexColor()), weight));
+            influenceWeight += weight;
+
+            if (proximity >= 0.42) {
+                contributingSamples += 1;
+            }
         }
 
-        return ColorMath.average(weightedColors);
+        ColorMath.Rgb accent = ColorMath.accentForCell(xRatio, yRatio);
+        double accentWeight = submissions.isEmpty() ? 0.72 : 0.18;
+        weightedColors.add(new ColorMath.WeightedColor(accent, accentWeight));
+
+        ColorMath.Rgb average = ColorMath.average(weightedColors);
+        double contrast = ColorMath.distance(average, globalAverage) / MAX_COLOR_DISTANCE;
+        double accentBlend = submissions.isEmpty()
+                ? 0.38
+                : Math.max(0.08, 0.18 - Math.min(0.1, influenceWeight * 0.06));
+        ColorMath.Rgb balanced = ColorMath.blend(average, accent, accentBlend);
+        ColorMath.Rgb saturated = ColorMath.saturate(balanced, 0.16 + (contrast * 0.32));
+
+        return new CellBlend(saturated, influenceWeight, contributingSamples);
     }
 
     private List<DominantColorResponse> buildDominantColors(List<ColorSubmission> submissions) {
         if (submissions.isEmpty()) {
-            return List.of(new DominantColorResponse("#AF6175", 0, 0));
+            return List.of();
         }
 
         Map<String, Long> groupedColors = new LinkedHashMap<>();
@@ -156,5 +188,18 @@ public class ColorService {
                         entry.getValue() / (double) total
                 ))
                 .toList();
+    }
+
+    private Instant resolveSince(Duration fallbackWindow, Instant sinceOverride, Instant now) {
+        Instant fallbackSince = now.minus(fallbackWindow);
+
+        if (sinceOverride == null || sinceOverride.isBefore(fallbackSince)) {
+            return fallbackSince;
+        }
+
+        return sinceOverride;
+    }
+
+    private record CellBlend(ColorMath.Rgb color, double influenceWeight, int sampleCount) {
     }
 }

@@ -16,8 +16,18 @@ const INITIAL_SELECTION: SpectrumSelection = {
   y: 0.3
 };
 
+async function loadSessionFeed(sessionStartedAt: string) {
+  const [nextCollage, nextRecent] = await Promise.all([
+    fetchCollage(sessionStartedAt),
+    fetchRecentSubmissions(sessionStartedAt)
+  ]);
+
+  return { nextCollage, nextRecent };
+}
+
 export default function App() {
   const deviceId = useDeviceId();
+  const [sessionStartedAt] = useState(() => new Date().toISOString());
   const [selection, setSelection] = useState<SpectrumSelection>(INITIAL_SELECTION);
   const [collage, setCollage] = useState<CollageResponse | null>(null);
   const [recentSubmissions, setRecentSubmissions] = useState<ColorSubmission[]>([]);
@@ -25,7 +35,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
 
   async function refreshFeed() {
-    const [nextCollage, nextRecent] = await Promise.all([fetchCollage(), fetchRecentSubmissions()]);
+    const { nextCollage, nextRecent } = await loadSessionFeed(sessionStartedAt);
     setCollage(nextCollage);
     setRecentSubmissions(nextRecent);
   }
@@ -38,7 +48,7 @@ export default function App() {
     }, 8000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [sessionStartedAt]);
 
   async function handleShare() {
     setSubmitting(true);

@@ -4,7 +4,10 @@ import com.vibraphone.color.domain.ColorService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import java.time.Instant;
 import java.util.List;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.format.annotation.DateTimeFormat.ISO;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -38,8 +41,11 @@ public class ColorController {
             @RequestParam(defaultValue = "24")
             @Min(1)
             @Max(200)
-            int limit) {
-        return colorService.getRecentSubmissions(limit);
+            int limit,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = ISO.DATE_TIME)
+            Instant since) {
+        return colorService.getRecentSubmissions(limit, since);
     }
 
     @GetMapping("/collage")
@@ -55,7 +61,10 @@ public class ColorController {
             @RequestParam(defaultValue = "48")
             @Min(1)
             @Max(720)
-            int hours) {
-        return colorService.generateCollage(width, height, hours);
+            int hours,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = ISO.DATE_TIME)
+            Instant since) {
+        return colorService.generateCollage(width, height, hours, since);
     }
 }

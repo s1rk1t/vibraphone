@@ -41,6 +41,19 @@ export interface CollageResponse {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
+function withQuery(path: string, params: Record<string, string | number | undefined>): string {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) {
+      query.set(key, String(value));
+    }
+  });
+
+  const queryString = query.toString();
+  return queryString ? `${path}?${queryString}` : path;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     headers: {
@@ -65,10 +78,18 @@ export async function submitColor(payload: ColorSelectionPayload): Promise<Color
   });
 }
 
-export async function fetchCollage(): Promise<CollageResponse> {
-  return request<CollageResponse>("/api/colors/collage?width=6&height=8&hours=72");
+export async function fetchCollage(since?: string): Promise<CollageResponse> {
+  return request<CollageResponse>(withQuery("/api/colors/collage", {
+    width: 6,
+    height: 8,
+    hours: 72,
+    since
+  }));
 }
 
-export async function fetchRecentSubmissions(): Promise<ColorSubmission[]> {
-  return request<ColorSubmission[]>("/api/colors/submissions?limit=8");
+export async function fetchRecentSubmissions(since?: string): Promise<ColorSubmission[]> {
+  return request<ColorSubmission[]>(withQuery("/api/colors/submissions", {
+    limit: 8,
+    since
+  }));
 }
